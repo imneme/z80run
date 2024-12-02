@@ -488,15 +488,14 @@ private:
 
         const uint16_t addr = Z80_GET_ADDR(pins_);
         if (pins_ & Z80_RD) {
-            if (!checker_.check_read(addr)) {
-                logger_.violation("Memory read not allowed", addr);
-                return false;
-            }
             // You might think that Z80_M1 is the thing to check here, but
             // actually that only fires on the first cycle of an instruction
             // if it's a multibyte instruction, you'll be out of luck.
             bool is_instruction = addr == this->pc - 1;
-            if (is_instruction && !checker_.check_execute(addr)) {
+            if (!is_instruction && !checker_.check_read(addr)) {
+                logger_.violation("Memory read not allowed", addr);
+                return false;
+            } else if (is_instruction && !checker_.check_execute(addr)) {
                 logger_.violation("Instruction fetch not allowed", addr);
                 return false;
             }
