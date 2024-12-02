@@ -36,6 +36,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <list>
 #include <map>
 #include <optional>
 #include <format>
@@ -147,8 +148,9 @@ private:
 class EventDetector {
 public:
     virtual ~EventDetector() = default;
-    virtual std::optional<std::string> on_memory_read(uint16_t addr, uint8_t value) = 0;
-    virtual std::optional<std::string> on_memory_write(uint16_t addr, uint8_t value) = 0;
+    virtual void memory_read(uint16_t addr, uint8_t value) = 0;
+    virtual void memory_write(uint16_t addr, uint8_t value) = 0;
+    virtual std::optional<std::string> event() = 0;
 };
 
 class MemoryWatcher : public EventDetector {
@@ -158,56 +160,71 @@ public:
     MemoryWatcher(uint16_t addr, Size size, std::span<uint8_t> memory, SymbolTable& symbols)
         : addr_(addr), size_(size), memory_(memory), symbols_(symbols) {
         // Capture initial value
-        update_last_value();
+        last_value_ = fetch_value();
     }
 
-    std::optional<std::string> on_memory_read(uint16_t addr, uint8_t value) override {
-        return check_change(addr);
+    void memory_read(uint16_t addr, uint8_t value) override {
+        check_trigger(addr);
     }
 
-    std::optional<std::string> on_memory_write(uint16_t addr, uint8_t value) override {
-        auto result = check_change(addr);
-        if (result) {
-            update_last_value();
+    void memory_write(uint16_t addr, uint8_t value) override {
+        check_trigger(addr);
+    }
+
+    std::optional<std::string> event() override {
+        if (!triggered_) {
+            return std::nullopt;
         }
-        return result;
+
+        triggered_ = false;
+        uint32_t current = fetch_value();
+        uint32_t last_value = last_value_;
+        auto symbolicated = symbols_.find_symbol_or_address(addr_);
+        if (current != last_value_) {
+            last_value_ = current;
+            switch (size_) {
+                case Size::Byte:
+                    return std::format("Watch {}: {:02x} -> {:02x}", 
+                        symbolicated, last_value, current);
+                case Size::Word:
+                    return std::format("Watch {}: {:04x} -> {:04x}", 
+                        symbolicated, last_value, current);
+                case Size::Long:
+                    return std::format("Watch {}: {:08x} -> {:08x}", 
+                        symbolicated, last_value, current);
+            }
+        } else {
+            switch (size_) {
+                case Size::Byte:
+                    return std::format("Watch {}: {:02x}", symbolicated, current);
+                case Size::Word:
+                    return std::format("Watch {}: {:04x}", symbolicated, current);
+                case Size::Long:
+                    return std::format("Watch {}: {:08x}", symbolicated, current);
+            }
+        }
+
+        return std::nullopt;    
     }
+
 
 private:
-    void update_last_value() {
-        last_value_ = 0;
+    uint32_t fetch_value() {
+        uint32_t value = 0;
         for (size_t i = 0; i < static_cast<size_t>(size_); ++i) {
-            last_value_ |= static_cast<uint32_t>(memory_[addr_ + i]) << (8 * i);
+            value |= static_cast<uint32_t>(memory_[addr_ + i]) << (8 * i);
         }
+        return value;
     }
 
-    std::optional<std::string> check_change(uint16_t access_addr) {
+    void check_trigger(uint16_t access_addr) {
         // Check if this access affects our watched region
         if (access_addr >= addr_ && access_addr < addr_ + static_cast<size_t>(size_)) {
-            uint32_t current = 0;
-            for (size_t i = 0; i < static_cast<size_t>(size_); ++i) {
-                current |= static_cast<uint32_t>(memory_[addr_ + i]) << (8 * i);
-            }
-            if (current != last_value_) {
-                auto symbolicated = symbols_.find_symbol(addr_) 
-                    ? *symbols_.find_symbol(addr_)
-                    : std::format("{:04x}", addr_);
-                switch (size_) {
-                    case Size::Byte:
-                        return std::format("Watch {}: {:02x} -> {:02x}", 
-                            symbolicated, last_value_, current);
-                    case Size::Word:
-                        return std::format("Watch {}: {:04x} -> {:04x}", 
-                            symbolicated, last_value_, current);
-                    case Size::Long:
-                        return std::format("Watch {}: {:08x} -> {:08x}", 
-                            symbolicated, last_value_, current);
-                }
-            }
+            triggered_ = true;
         }
-        return std::nullopt;
     }
 
+    bool triggered_ = false;
     uint16_t addr_;
     Size size_;
     std::span<uint8_t> memory_;
@@ -217,31 +234,56 @@ private:
 
 class MemoryRangeWatcher : public EventDetector {
 public:
-    MemoryRangeWatcher(uint16_t start, uint16_t end, std::span<uint8_t> memory)
-        : start_(start), end_(end), memory_(memory) {
+    MemoryRangeWatcher(uint16_t start, uint16_t end, std::span<uint8_t> memory, SymbolTable& symbols)
+        : start_(start), end_(end), memory_(memory), symbols_(symbols) {
         last_values_.resize(end - start + 1);
         std::copy(memory.begin() + start, memory.begin() + end + 1, last_values_.begin());
     }
 
-    std::optional<std::string> on_memory_read(uint16_t addr, uint8_t value) override {
-        return check_change(addr);
+    void memory_read(uint16_t addr, uint8_t value) override {
+        auto change = check_change(addr);
+        if (change) {
+            events_.push_back(*change);
+        }
     }
 
-    std::optional<std::string> on_memory_write(uint16_t addr, uint8_t value) override {
-        auto result = check_change(addr);
-        if (result) {
+    void memory_write(uint16_t addr, uint8_t value) override {
+        auto change = check_change(addr);
+        if (change) {
             last_values_[addr - start_] = value;
+            events_.push_back(*change);
         }
-        return result;
+    }
+
+    std::optional<std::string> event() override {
+        if (events_.empty()) {
+            return std::nullopt;
+        }
+
+        // Join the events with commas
+        std::string result;
+        bool did_first = false;
+        for (const auto& event : events_) {
+            if (did_first) {
+                result += ", ";
+            }
+            result += event;
+            did_first = true;
+        }
+        events_.clear();
+        auto sym_start = symbols_.find_symbol_or_address(start_);
+        auto sym_end = symbols_.find_symbol_or_address(end_);
+        return std::format("Watch range {}-{}: {}", sym_start, sym_end, result);
     }
 
 private:
     std::optional<std::string> check_change(uint16_t addr) {
         if (addr >= start_ && addr <= end_) {
             uint8_t current = memory_[addr];
-            if (current != last_values_[addr - start_]) {
-                return std::format("Watch range {:04x}-{:04x}: byte {:04x} changed: {:02x} -> {:02x}",
-                    start_, end_, addr, last_values_[addr - start_], current);
+            uint8_t last = last_values_[addr - start_];
+            if (current != last) {
+                return std::format("byte {} changed: {:02x} -> {:02x}",
+                    symbols_.find_symbol_or_address(addr), last, current);
             }
         }
         return std::nullopt;
@@ -251,6 +293,8 @@ private:
     uint16_t end_;
     std::span<uint8_t> memory_;
     std::vector<uint8_t> last_values_;
+    std::list<std::string> events_;
+    SymbolTable& symbols_;
 };
 
 class ConstraintChecker {
@@ -321,14 +365,18 @@ public:
 
     void instruction_start(uint16_t pc, const class CPU& cpu);  // Defined after CPU
 
-    void instruction_finish(uint16_t pc, const class CPU& cpu); // Defined after CPU
+    void instruction_finish(uint16_t pc, const class CPU& cpu) {
+        for (auto& detector : detectors_) {
+            if (auto event = detector->event()) {
+                log_detector_event(*event);
+            }
+        }
+    }
 
     void memory_read(uint16_t addr, uint8_t value, bool is_instruction) {
         // Always check detectors, regardless of logging options
         for (auto& detector : detectors_) {
-            if (auto event = detector->on_memory_read(addr, value)) {
-                log_detector_event(*event);
-            }
+            detector->memory_read(addr, value);
         }
 
         if ((!is_instruction && !(options_ & LogOpt::MemoryReads))
@@ -349,9 +397,7 @@ public:
     void memory_write(uint16_t addr, uint8_t value) {
         // Always check detectors, regardless of logging options
         for (auto& detector : detectors_) {
-            if (auto event = detector->on_memory_write(addr, value)) {
-                log_detector_event(*event);
-            }
+            detector->memory_write(addr, value);
         }
 
         if (!(options_ & LogOpt::MemoryWrites)) {
@@ -363,7 +409,7 @@ public:
         }
 
         auto sym = symbols_.find_symbol_or_address(addr);
-        std::cout << std::format(" \t\t\t\t\tW {:02x} @ {}", value, sym);
+        std::cout << std::format(" \t\t\t\tW {:02x} @ {}", value, sym);
         std::cout << "\n";
     }
 
@@ -538,12 +584,6 @@ std::string SymbolTable::disassemble_address(uint32_t address, std::span<uint8_t
     result.append(input.begin() + last_pos, input.end());
 
     return result;
-}
-
-// And instruction_finish, does nothing right now
-void EventLogger::instruction_finish(uint16_t pc, const CPU& cpu) {
-    (void)pc;
-    (void)cpu;
 }
 
 struct Config {
@@ -798,7 +838,7 @@ int main(int argc, char* argv[]) try {
                 break;
             case Config::WatchSpec::Type::Range:
                 logger.add_detector(std::make_unique<MemoryRangeWatcher>(
-                    watch.addr, watch.end_addr, memory));
+                    watch.addr, watch.end_addr, memory, symbols));
                 break;
         }
     }
