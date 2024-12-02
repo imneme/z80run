@@ -134,6 +134,8 @@ public:
         return addr;
     }
 
+    std::string disassemble_address(uint32_t address, std::span<uint8_t> memory) const;
+
 private:
     std::map<uint16_t, std::string> by_address_;
     std::map<std::string, uint16_t, CaseInsensitiveCompare> by_name_;
@@ -477,6 +479,11 @@ void EventLogger::instruction_start(uint16_t pc, const CPU& cpu) {
     }
     
     // Disassemble the instruction
+    std::cout << symbols_.disassemble_address(pc, cpu.memory()) << "\n";
+}
+
+std::string SymbolTable::disassemble_address(uint32_t address, std::span<uint8_t> memory) const {
+    std::string result;
     class DisasmContext {
     public:
         uint16_t pc;
@@ -498,12 +505,11 @@ void EventLogger::instruction_start(uint16_t pc, const CPU& cpu) {
     };
 
     std::string disasm;
-    DisasmContext ctx(pc, cpu.memory(), disasm);
-    z80dasm_op(pc, DisasmContext::read_byte, DisasmContext::write_char, &ctx);
+    DisasmContext ctx(address, memory, disasm);
+    z80dasm_op(address, DisasmContext::read_byte, DisasmContext::write_char, &ctx);
 
     // Look for addresses in the disassembly and try to replace with symbols
     std::regex addr_re(R"(([0-9A-F]{4})[Hh])");
-    std::string result;
     std::string_view input(disasm);
     std::match_results<std::string_view::const_iterator> match;
     size_t last_pos = 0;
@@ -511,7 +517,7 @@ void EventLogger::instruction_start(uint16_t pc, const CPU& cpu) {
     while (std::regex_search(input.begin() + last_pos, input.end(), match, addr_re)) {
         result.append(input.begin() + last_pos, input.begin() + last_pos + match.position());
         uint16_t addr = std::stoul(std::string(match[1]), nullptr, 16);
-        if (auto sym = symbols_.find_symbol(addr)) {
+        if (auto sym = find_symbol(addr)) {
             result += *sym;
         } else {
             result.append(match[0]);
@@ -520,7 +526,7 @@ void EventLogger::instruction_start(uint16_t pc, const CPU& cpu) {
     }
     result.append(input.begin() + last_pos, input.end());
 
-    std::cout << result << "\n";
+    return result;
 }
 
 struct Config {
