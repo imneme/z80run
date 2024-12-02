@@ -46,6 +46,17 @@
 
 class SymbolTable {
 public:
+    // Case insensitive comparison for map
+    struct CaseInsensitiveCompare {
+        bool operator()(const std::string& a, const std::string& b) const {
+            return std::lexicographical_compare(
+                a.begin(), a.end(),
+                b.begin(), b.end(),
+                [](char a, char b) { return std::toupper(a) < std::toupper(b); }
+            );
+        }
+    };
+
     void load_file(const std::string& filename) {
         std::ifstream file(filename);
         if (!file) {
@@ -85,17 +96,47 @@ public:
     }
 
     std::optional<uint16_t> find_address(std::string_view name) const {
-        // TODO: Case insensitive lookup
-        auto it = by_name_.find(std::string(name));
-        if (it != by_name_.end()) {
-            return it->second;
+        // Parse symbol[+-]offset format
+        std::regex offset_re(R"(([^+-]+)([-+]\d+)?)");
+        std::match_results<std::string_view::const_iterator> match;
+        
+        if (!std::regex_match(name.begin(), name.end(), match, offset_re)) {
+            return std::nullopt;
         }
-        return std::nullopt;
+        
+        std::string symbol(match[1]);
+        
+        // Look up base symbol (case insensitive)
+        auto it = by_name_.find(symbol);
+        if (it == by_name_.end()) {
+            // Try case-insensitive search
+            for (const auto& [key, value] : by_name_) {
+                if (!CaseInsensitiveCompare()(key, symbol) && 
+                    !CaseInsensitiveCompare()(symbol, key)) {
+                    it = by_name_.find(key);
+                    break;
+                }
+            }
+            if (it == by_name_.end()) {
+                return std::nullopt;
+            }
+        }
+        
+        uint16_t addr = it->second;
+        
+        // Handle offset if present
+        if (match[2].matched) {
+            std::string offset_str(match[2]);
+            int offset = std::stoi(offset_str);
+            addr += offset;
+        }
+        
+        return addr;
     }
 
 private:
     std::map<uint16_t, std::string> by_address_;
-    std::map<std::string, uint16_t> by_name_;
+    std::map<std::string, uint16_t, CaseInsensitiveCompare> by_name_;
 };
 
 class ConstraintChecker {
