@@ -751,6 +751,38 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
                 throw std::runtime_error(std::format("Invalid number of cycles: {}", cycles_str));
             }
         }
+        else if (arg == "--logopts") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("--logopts requires an argument");
+            }
+            std::string opts = argv[++i];
+            uint32_t logopts = LogOpt::Most;
+            for (char c : opts) {
+                auto combiner = [&](uint32_t newOption) {
+                    if (std::islower(c)) {
+                        logopts |= newOption;
+                    } else {
+                        logopts &= ~newOption;
+                    }
+                };
+                switch (std::tolower(c)) {
+                    case 'c': combiner(LogOpt::Cycles); break;
+                    case 'i': combiner(LogOpt::Instructions); break;
+                    case 'r': combiner(LogOpt::MemoryReads); break;
+                    case 'w': combiner(LogOpt::MemoryWrites); break;
+                    case 'f': combiner(LogOpt::InstructionFetches); break;
+                    case 'v': combiner(LogOpt::Violations); break;
+                    case 'a': combiner(LogOpt::All); break;
+                    case 'm': combiner(LogOpt::Most); break;
+                    case ' ': // fallthrough
+                    case '\t': // fallthrough
+                    case '\n': break; // Ignore whitespace
+                    default:
+                        throw std::runtime_error(std::format("Invalid log option: {}", c));
+                }
+            }
+            cfg.verbosity = logopts;
+        }
         else if (arg == "--watch" || arg == "--watch-word" || arg == "--watch-long") {
             if (i + 1 >= argc) {
                 throw std::runtime_error(std::format("{} requires an address", arg));

@@ -72,6 +72,15 @@ The output shows instruction execution, memory access, and detected changes:
 - `--stack addr` - Set initial stack pointer
 - `--max-cycles N` - Run for at most N cycles
 - `--protect range:flags` - Protect memory range (flags: r=read, w=write, x=execute)
+- `--logopts options` - Set logging options. Combine the options below. Use captial letters to disable rather than enable.
+    - `c` - Show instruction cycles
+    - `i` - Print (disassemble) instructions as they're executed
+    - `r` - Show memory reads
+    - `w` - Show memory writes
+    - `f` - Show instruction fetches
+    - `v` - Show memory protection violations
+    - `a` - Show all (equivalent to `cirwfv`); if you want to begin with a blank slate, use `A` as the first option
+    - `m` - Show most (equivalent to `aF`), the default (everything except instruction fetches)
 
 Memory watching:
 - `--watch addr` - Watch byte at address
