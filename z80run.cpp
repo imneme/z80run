@@ -139,6 +139,111 @@ private:
     std::map<std::string, uint16_t, CaseInsensitiveCompare> by_name_;
 };
 
+class EventDetector {
+public:
+    virtual ~EventDetector() = default;
+    virtual std::optional<std::string> on_memory_read(uint16_t addr, uint8_t value) = 0;
+    virtual std::optional<std::string> on_memory_write(uint16_t addr, uint8_t value) = 0;
+};
+
+class MemoryWatcher : public EventDetector {
+public:
+    enum class Size { Byte = 1, Word = 2, Long = 4 };
+
+    MemoryWatcher(uint16_t addr, Size size, std::span<uint8_t> memory)
+        : addr_(addr), size_(size), memory_(memory) {
+        // Capture initial value
+        update_last_value();
+    }
+
+    std::optional<std::string> on_memory_read(uint16_t addr, uint8_t value) override {
+        return check_change(addr);
+    }
+
+    std::optional<std::string> on_memory_write(uint16_t addr, uint8_t value) override {
+        auto result = check_change(addr);
+        if (result) {
+            update_last_value();
+        }
+        return result;
+    }
+
+private:
+    void update_last_value() {
+        last_value_ = 0;
+        for (size_t i = 0; i < static_cast<size_t>(size_); ++i) {
+            last_value_ |= static_cast<uint32_t>(memory_[addr_ + i]) << (8 * i);
+        }
+    }
+
+    std::optional<std::string> check_change(uint16_t access_addr) {
+        // Check if this access affects our watched region
+        if (access_addr >= addr_ && access_addr < addr_ + static_cast<size_t>(size_)) {
+            uint32_t current = 0;
+            for (size_t i = 0; i < static_cast<size_t>(size_); ++i) {
+                current |= static_cast<uint32_t>(memory_[addr_ + i]) << (8 * i);
+            }
+            if (current != last_value_) {
+                switch (size_) {
+                    case Size::Byte:
+                        return std::format("Watch {:04x}: {:02x} -> {:02x}", 
+                            addr_, last_value_, current);
+                    case Size::Word:
+                        return std::format("Watch {:04x}: {:04x} -> {:04x}", 
+                            addr_, last_value_, current);
+                    case Size::Long:
+                        return std::format("Watch {:04x}: {:08x} -> {:08x}", 
+                            addr_, last_value_, current);
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
+    uint16_t addr_;
+    Size size_;
+    std::span<uint8_t> memory_;
+    uint32_t last_value_;
+};
+
+class MemoryRangeWatcher : public EventDetector {
+public:
+    MemoryRangeWatcher(uint16_t start, uint16_t end, std::span<uint8_t> memory)
+        : start_(start), end_(end), memory_(memory) {
+        last_values_.resize(end - start + 1);
+        std::copy(memory.begin() + start, memory.begin() + end + 1, last_values_.begin());
+    }
+
+    std::optional<std::string> on_memory_read(uint16_t addr, uint8_t value) override {
+        return check_change(addr);
+    }
+
+    std::optional<std::string> on_memory_write(uint16_t addr, uint8_t value) override {
+        auto result = check_change(addr);
+        if (result) {
+            last_values_[addr - start_] = value;
+        }
+        return result;
+    }
+
+private:
+    std::optional<std::string> check_change(uint16_t addr) {
+        if (addr >= start_ && addr <= end_) {
+            uint8_t current = memory_[addr];
+            if (current != last_values_[addr - start_]) {
+                return std::format("Watch range {:04x}-{:04x}: byte {:04x} changed: {:02x} -> {:02x}",
+                    start_, end_, addr, last_values_[addr - start_], current);
+            }
+        }
+        return std::nullopt;
+    }
+
+    uint16_t start_;
+    uint16_t end_;
+    std::span<uint8_t> memory_;
+    std::vector<uint8_t> last_values_;
+};
+
 class ConstraintChecker {
 public:
     static constexpr uint8_t NO_READ = 1;
@@ -209,6 +314,13 @@ public:
     void instruction_start(uint16_t pc, const class CPU& cpu);  // Defined after CPU
 
     void memory_read(uint16_t addr, uint8_t value, bool is_instruction) {
+        // Always check detectors, regardless of logging options
+        for (auto& detector : detectors_) {
+            if (auto event = detector->on_memory_read(addr, value)) {
+                log_detector_event(*event);
+            }
+        }
+
         if (!is_instruction && !(options_ & static_cast<uint32_t>(LogOpt::MemoryReads))) {
             return;
         }
@@ -218,14 +330,21 @@ public:
         }
 
         if (auto sym = symbols_.find_symbol(addr)) {
-            std::cout << std::format(" \t\tR {:02x} @ {} ", value, *sym);
+            std::cout << std::format(" \t\t\tR {:02x} @ {} ", value, *sym);
         } else {
-            std::cout << std::format(" \t\tR {:02x} @ {:04x}", value, addr);
+            std::cout << std::format(" \t\t\tR {:02x} @ {:04x}", value, addr);
         }
         std::cout << "\n";
     }
 
     void memory_write(uint16_t addr, uint8_t value) {
+        // Always check detectors, regardless of logging options
+        for (auto& detector : detectors_) {
+            if (auto event = detector->on_memory_write(addr, value)) {
+                log_detector_event(*event);
+            }
+        }
+
         if (!(options_ & static_cast<uint32_t>(LogOpt::MemoryWrites))) {
             return;
         }
@@ -235,9 +354,9 @@ public:
         }
 
         if (auto sym = symbols_.find_symbol(addr)) {
-            std::cout << std::format(" \t\tW {:02x} @ {} ", value, *sym);
+            std::cout << std::format(" \t\t\tW {:02x} @ {} ", value, *sym);
         } else {
-            std::cout << std::format(" \t\tW {:02x} @ {:04x}", value, addr);
+            std::cout << std::format(" \t\t\tW {:02x} @ {:04x}", value, addr);
         }
         std::cout << "\n";
     }
@@ -262,10 +381,22 @@ public:
         }
     }
 
+    void add_detector(std::unique_ptr<EventDetector> detector) {
+        detectors_.push_back(std::move(detector));
+    }
+
 private:
+    void log_detector_event(const std::string& message) {
+        if (options_ & static_cast<uint32_t>(LogOpt::Cycles)) {
+            std::cout << std::format("{:7}:", current_cycle_);
+        }
+        std::cout << std::format(" \t\t\t{}\n", message);
+    }
+
     uint32_t options_ = static_cast<uint32_t>(LogOpt::All);  // Everything on by default
     uint32_t current_cycle_ = 0;
     const SymbolTable& symbols_;
+    std::vector<std::unique_ptr<EventDetector>> detectors_;
 };
 
 class CPU : public z80_t {
@@ -337,10 +468,14 @@ void EventLogger::instruction_start(uint16_t pc, const CPU& cpu) {
         return;
     }
 
+    if (options_ & static_cast<uint32_t>(LogOpt::Cycles)) {
+        std::cout << std::format("{:7}:", current_cycle_);
+    }
+
     if (auto sym = symbols_.find_symbol(pc)) {
-        std::cout << std::format("{:<10}\t", *sym);
+        std::cout << std::format(" {:<10}\t", *sym);
     } else {
-        std::cout << std::format("{:04x}      \t", pc);
+        std::cout << std::format(" {:04x}      \t", pc);
     }
     
     // Disassemble the instruction
@@ -395,9 +530,16 @@ struct Config {
         std::string filename;
         uint16_t address;
     };
+    struct WatchSpec {
+        enum class Type { Byte, Word, Long, Range };
+        Type type;
+        uint16_t addr;
+        uint16_t end_addr;  // Only used for Range type
+    };
     std::vector<LoadSpec> files_to_load;
     uint32_t verbosity = 0xFFFFFFFF;  // Everything on by default
     std::vector<std::tuple<uint16_t, uint16_t, uint8_t>> protections;
+    std::vector<WatchSpec> watches;
     std::optional<uint16_t> start_address;
     std::optional<uint16_t> stack_address;
     std::optional<uint32_t> max_cycles;
@@ -538,6 +680,74 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
                 throw std::runtime_error(std::format("Invalid number of cycles: {}", cycles_str));
             }
         }
+        else if (arg == "--watch" || arg == "--watch-word" || arg == "--watch-long") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error(std::format("{} requires an address", arg));
+            }
+            std::string addr_spec = argv[++i];
+            uint16_t addr;
+
+            // Could be a hex address or a symbol
+            try {
+                addr = std::stoul(addr_spec, nullptr, 0);
+            } catch (const std::exception&) {
+                // Not a number, try as symbol
+                if (auto sym_addr = symbols.find_address(addr_spec)) {
+                    addr = *sym_addr;
+                } else {
+                    throw std::runtime_error(std::format("Unknown symbol: {}", addr_spec));
+                }
+            }
+
+            Config::WatchSpec::Type type = Config::WatchSpec::Type::Byte;
+            if (arg == "--watch-word") {
+                type = Config::WatchSpec::Type::Word;
+            } else if (arg == "--watch-long") {
+                type = Config::WatchSpec::Type::Long;
+            }
+            
+            cfg.watches.push_back({type, addr, 0});
+        }
+        else if (arg == "--watch-range") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("--watch-range requires start-end addresses");
+            }
+            std::string range = argv[++i];
+            
+            // Parse start-end format
+            size_t dash_pos = range.find('-');
+            if (dash_pos == std::string::npos) {
+                throw std::runtime_error("--watch-range requires start-end format");
+            }
+            
+            std::string start_spec = range.substr(0, dash_pos);
+            std::string end_spec = range.substr(dash_pos + 1);
+            uint16_t start_addr, end_addr;
+            
+            // Parse start address
+            try {
+                start_addr = std::stoul(start_spec, nullptr, 0);
+            } catch (const std::exception&) {
+                if (auto sym_addr = symbols.find_address(start_spec)) {
+                    start_addr = *sym_addr;
+                } else {
+                    throw std::runtime_error(std::format("Unknown symbol: {}", start_spec));
+                }
+            }
+            
+            // Parse end address
+            try {
+                end_addr = std::stoul(end_spec, nullptr, 0);
+            } catch (const std::exception&) {
+                if (auto sym_addr = symbols.find_address(end_spec)) {
+                    end_addr = *sym_addr;
+                } else {
+                    throw std::runtime_error(std::format("Unknown symbol: {}", end_spec));
+                }
+            }
+            
+            cfg.watches.push_back({Config::WatchSpec::Type::Range, start_addr, end_addr});
+        }
     }
     
     return cfg;
@@ -572,6 +782,28 @@ int main(int argc, char* argv[]) try {
     std::vector<uint8_t> memory(1 << 16);  // 64K
     EventLogger logger(symbols);
     logger.set_verbosity(cfg.verbosity);
+    
+    // Set up memory watches
+    for (const auto& watch : cfg.watches) {
+        switch (watch.type) {
+            case Config::WatchSpec::Type::Byte:
+                logger.add_detector(std::make_unique<MemoryWatcher>(
+                    watch.addr, MemoryWatcher::Size::Byte, memory));
+                break;
+            case Config::WatchSpec::Type::Word:
+                logger.add_detector(std::make_unique<MemoryWatcher>(
+                    watch.addr, MemoryWatcher::Size::Word, memory));
+                break;
+            case Config::WatchSpec::Type::Long:
+                logger.add_detector(std::make_unique<MemoryWatcher>(
+                    watch.addr, MemoryWatcher::Size::Long, memory));
+                break;
+            case Config::WatchSpec::Type::Range:
+                logger.add_detector(std::make_unique<MemoryRangeWatcher>(
+                    watch.addr, watch.end_addr, memory));
+                break;
+        }
+    }
     
     ConstraintChecker checker;
     for (const auto& [start, end, protection] : cfg.protections) {
