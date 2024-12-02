@@ -299,7 +299,8 @@ public:
     static constexpr uint32_t InstructionFetches = 1 << 3;
     static constexpr uint32_t Violations         = 1 << 4;
     static constexpr uint32_t Cycles             = 1 << 5;
-    static constexpr uint32_t All = Instructions | MemoryReads | MemoryWrites | Violations | Cycles;
+    static constexpr uint32_t Most = Instructions | MemoryReads | MemoryWrites | Violations | Cycles;
+    static constexpr uint32_t All = Instructions | MemoryReads | MemoryWrites | InstructionFetches | Violations | Cycles;
 };
 
 class EventLogger {
@@ -325,7 +326,8 @@ public:
             }
         }
 
-        if (!is_instruction && !(options_ & LogOpt::MemoryReads)) {
+        if ((!is_instruction && !(options_ & LogOpt::MemoryReads))
+            || (is_instruction && !(options_ & LogOpt::InstructionFetches))) {
             return;
         }
         
@@ -333,10 +335,11 @@ public:
             std::cout << std::format("{:7}:", current_cycle_);
         }
 
+        char code = is_instruction ? 'I' : 'R';
         if (auto sym = symbols_.find_symbol(addr)) {
-            std::cout << std::format(" \t\t\tR {:02x} @ {} ", value, *sym);
+            std::cout << std::format(" \t\t\t{} {:02x} @ {} ", code, value, *sym);
         } else {
-            std::cout << std::format(" \t\t\tR {:02x} @ {:04x}", value, addr);
+            std::cout << std::format(" \t\t\t{} {:02x} @ {:04x}", code, value, addr);
         }
         std::cout << "\n";
     }
@@ -397,7 +400,7 @@ private:
         std::cout << std::format(" \t\t\t{}\n", message);
     }
 
-    uint32_t options_ = LogOpt::All;  // Everything on by default
+    uint32_t options_ = LogOpt::Most;  // Almost everything on by default
     uint32_t current_cycle_ = 0;
     const SymbolTable& symbols_;
     std::vector<std::unique_ptr<EventDetector>> detectors_;
@@ -548,7 +551,7 @@ struct Config {
         uint16_t end_addr;  // Only used for Range type
     };
     std::vector<LoadSpec> files_to_load;
-    uint32_t verbosity = 0xFFFFFFFF;  // Everything on by default
+    uint32_t verbosity = LogOpt::Most;
     std::vector<std::tuple<uint16_t, uint16_t, uint8_t>> protections;
     std::vector<WatchSpec> watches;
     std::optional<uint16_t> start_address;
