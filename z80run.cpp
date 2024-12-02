@@ -95,6 +95,13 @@ public:
         return std::nullopt;
     }
 
+    std::string find_symbol_or_address(uint16_t address) const {
+        if (auto sym = find_symbol(address)) {
+            return *sym;
+        }
+        return std::format("{:04x}", address);
+    }
+
     std::optional<uint16_t> find_address(std::string_view name) const {
         // Parse symbol[+-]offset format
         std::regex offset_re(R"(([^+-]+)([-+]\d+)?)");
@@ -334,11 +341,8 @@ public:
         }
 
         char code = is_instruction ? 'I' : 'R';
-        if (auto sym = symbols_.find_symbol(addr)) {
-            std::cout << std::format(" \t\t\t{} {:02x} @ {} ", code, value, *sym);
-        } else {
-            std::cout << std::format(" \t\t\t{} {:02x} @ {:04x}", code, value, addr);
-        }
+        auto sym = symbols_.find_symbol_or_address(addr);
+        std::cout << std::format(" \t\t\t\t{} {:02x} @ {}", code, value, sym);
         std::cout << "\n";
     }
 
@@ -358,11 +362,8 @@ public:
             std::cout << std::format("{:7}:", current_cycle_);
         }
 
-        if (auto sym = symbols_.find_symbol(addr)) {
-            std::cout << std::format(" \t\t\tW {:02x} @ {} ", value, *sym);
-        } else {
-            std::cout << std::format(" \t\t\tW {:02x} @ {:04x}", value, addr);
-        }
+        auto sym = symbols_.find_symbol_or_address(addr);
+        std::cout << std::format(" \t\t\t\tW {:02x} @ {}", value, sym);
         std::cout << "\n";
     }
 
@@ -376,11 +377,8 @@ public:
         }
 
         if (addr) {
-            if (auto sym = symbols_.find_symbol(*addr)) {
-                std::cout << std::format(" Violation: {} at {}\n", message, *sym);
-            } else {
-                std::cout << std::format(" Violation: {} at {:04x}\n", message, *addr);
-            }
+            auto sym = symbols_.find_symbol_or_address(*addr);
+            std::cout << std::format(" Violation: {} at {}\n", message, sym);
         } else {
             std::cout << std::format(" Violation: {}\n", message);
         }
@@ -488,11 +486,8 @@ void EventLogger::instruction_start(uint16_t pc, const CPU& cpu) {
         std::cout << std::format("{:7}:", current_cycle_);
     }
 
-    if (auto sym = symbols_.find_symbol(pc)) {
-        std::cout << std::format(" {:<10}\t", *sym);
-    } else {
-        std::cout << std::format(" {:04x}      \t", pc);
-    }
+    auto sym = symbols_.find_symbol_or_address(pc);
+    std::cout << std::format(" {:<22}\t", sym);
     
     // Disassemble the instruction
     std::cout << symbols_.disassemble_address(pc, cpu.memory()) << "\n";
