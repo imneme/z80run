@@ -285,18 +285,16 @@ private:
     std::vector<Range> ranges_;
 };
 
-enum class LogOpt : uint32_t {
-    Instructions = 1 << 0,
-    MemoryReads  = 1 << 1,
-    MemoryWrites = 1 << 2,
-    Violations   = 1 << 3,
-    Cycles       = 1 << 4,
-    All = Instructions | MemoryReads | MemoryWrites | Violations | Cycles
+class LogOpt {
+public:
+    static constexpr uint32_t Instructions       = 1 << 0;
+    static constexpr uint32_t MemoryReads        = 1 << 1;
+    static constexpr uint32_t MemoryWrites       = 1 << 2;
+    static constexpr uint32_t InstructionFetches = 1 << 3;
+    static constexpr uint32_t Violations         = 1 << 4;
+    static constexpr uint32_t Cycles             = 1 << 5;
+    static constexpr uint32_t All = Instructions | MemoryReads | MemoryWrites | Violations | Cycles;
 };
-
-inline LogOpt operator|(LogOpt a, LogOpt b) {
-    return static_cast<LogOpt>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-}
 
 class EventLogger {
 public:
@@ -321,11 +319,11 @@ public:
             }
         }
 
-        if (!is_instruction && !(options_ & static_cast<uint32_t>(LogOpt::MemoryReads))) {
+        if (!is_instruction && !(options_ & LogOpt::MemoryReads)) {
             return;
         }
         
-        if (options_ & static_cast<uint32_t>(LogOpt::Cycles)) {
+        if (options_ & LogOpt::Cycles) {
             std::cout << std::format("{:7}:", current_cycle_);
         }
 
@@ -345,11 +343,11 @@ public:
             }
         }
 
-        if (!(options_ & static_cast<uint32_t>(LogOpt::MemoryWrites))) {
+        if (!(options_ & LogOpt::MemoryWrites)) {
             return;
         }
 
-        if (options_ & static_cast<uint32_t>(LogOpt::Cycles)) {
+        if (options_ & LogOpt::Cycles) {
             std::cout << std::format("{:7}:", current_cycle_);
         }
 
@@ -362,11 +360,11 @@ public:
     }
 
     void violation(std::string_view message, std::optional<uint16_t> addr = std::nullopt) {
-        if (!(options_ & static_cast<uint32_t>(LogOpt::Violations))) {
+        if (!(options_ & LogOpt::Violations)) {
             return;
         }
 
-        if (options_ & static_cast<uint32_t>(LogOpt::Cycles)) {
+        if (options_ & LogOpt::Cycles) {
             std::cout << std::format("{:7}:", current_cycle_);
         }
 
@@ -387,13 +385,13 @@ public:
 
 private:
     void log_detector_event(const std::string& message) {
-        if (options_ & static_cast<uint32_t>(LogOpt::Cycles)) {
+        if (options_ & LogOpt::Cycles) {
             std::cout << std::format("{:7}:", current_cycle_);
         }
         std::cout << std::format(" \t\t\t{}\n", message);
     }
 
-    uint32_t options_ = static_cast<uint32_t>(LogOpt::All);  // Everything on by default
+    uint32_t options_ = LogOpt::All;  // Everything on by default
     uint32_t current_cycle_ = 0;
     const SymbolTable& symbols_;
     std::vector<std::unique_ptr<EventDetector>> detectors_;
@@ -464,11 +462,11 @@ private:
 
 // Now we can define instruction_start since we have CPU
 void EventLogger::instruction_start(uint16_t pc, const CPU& cpu) {
-    if (!(options_ & static_cast<uint32_t>(LogOpt::Instructions))) {
+    if (!(options_ & LogOpt::Instructions)) {
         return;
     }
 
-    if (options_ & static_cast<uint32_t>(LogOpt::Cycles)) {
+    if (options_ & LogOpt::Cycles) {
         std::cout << std::format("{:7}:", current_cycle_);
     }
 
@@ -853,7 +851,7 @@ int main(int argc, char* argv[]) try {
         }
     }
 
-    if (cfg.max_cycles && cfg.verbosity & static_cast<uint32_t>(LogOpt::Cycles)) {
+    if (cfg.max_cycles && cfg.verbosity & LogOpt::Cycles) {
         std::cout << std::format("{:7}: Reached maximum cycle count ({})\n", 
             *cfg.max_cycles, *cfg.max_cycles);
     }
