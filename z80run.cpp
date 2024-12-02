@@ -152,8 +152,8 @@ class MemoryWatcher : public EventDetector {
 public:
     enum class Size { Byte = 1, Word = 2, Long = 4 };
 
-    MemoryWatcher(uint16_t addr, Size size, std::span<uint8_t> memory)
-        : addr_(addr), size_(size), memory_(memory) {
+    MemoryWatcher(uint16_t addr, Size size, std::span<uint8_t> memory, SymbolTable& symbols)
+        : addr_(addr), size_(size), memory_(memory), symbols_(symbols) {
         // Capture initial value
         update_last_value();
     }
@@ -186,16 +186,19 @@ private:
                 current |= static_cast<uint32_t>(memory_[addr_ + i]) << (8 * i);
             }
             if (current != last_value_) {
+                auto symbolicated = symbols_.find_symbol(addr_) 
+                    ? *symbols_.find_symbol(addr_)
+                    : std::format("{:04x}", addr_);
                 switch (size_) {
                     case Size::Byte:
-                        return std::format("Watch {:04x}: {:02x} -> {:02x}", 
-                            addr_, last_value_, current);
+                        return std::format("Watch {}: {:02x} -> {:02x}", 
+                            symbolicated, last_value_, current);
                     case Size::Word:
-                        return std::format("Watch {:04x}: {:04x} -> {:04x}", 
-                            addr_, last_value_, current);
+                        return std::format("Watch {}: {:04x} -> {:04x}", 
+                            symbolicated, last_value_, current);
                     case Size::Long:
-                        return std::format("Watch {:04x}: {:08x} -> {:08x}", 
-                            addr_, last_value_, current);
+                        return std::format("Watch {}: {:08x} -> {:08x}", 
+                            symbolicated, last_value_, current);
                 }
             }
         }
@@ -206,6 +209,7 @@ private:
     Size size_;
     std::span<uint8_t> memory_;
     uint32_t last_value_;
+    SymbolTable& symbols_;
 };
 
 class MemoryRangeWatcher : public EventDetector {
@@ -792,15 +796,15 @@ int main(int argc, char* argv[]) try {
         switch (watch.type) {
             case Config::WatchSpec::Type::Byte:
                 logger.add_detector(std::make_unique<MemoryWatcher>(
-                    watch.addr, MemoryWatcher::Size::Byte, memory));
+                    watch.addr, MemoryWatcher::Size::Byte, memory, symbols));
                 break;
             case Config::WatchSpec::Type::Word:
                 logger.add_detector(std::make_unique<MemoryWatcher>(
-                    watch.addr, MemoryWatcher::Size::Word, memory));
+                    watch.addr, MemoryWatcher::Size::Word, memory, symbols));
                 break;
             case Config::WatchSpec::Type::Long:
                 logger.add_detector(std::make_unique<MemoryWatcher>(
-                    watch.addr, MemoryWatcher::Size::Long, memory));
+                    watch.addr, MemoryWatcher::Size::Long, memory, symbols));
                 break;
             case Config::WatchSpec::Type::Range:
                 logger.add_detector(std::make_unique<MemoryRangeWatcher>(
