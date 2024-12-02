@@ -363,7 +363,7 @@ public:
         }
 
         auto sym = symbols_.find_symbol_or_address(addr);
-        std::cout << std::format(" \t\t\t\tW {:02x} @ {}", value, sym);
+        std::cout << std::format(" \t\t\t\t\tW {:02x} @ {}", value, sym);
         std::cout << "\n";
     }
 
@@ -393,7 +393,7 @@ private:
         if (options_ & LogOpt::Cycles) {
             std::cout << std::format("{:7}:", current_cycle_);
         }
-        std::cout << std::format(" \t\t\t{}\n", message);
+        std::cout << std::format(" \t\t\t\t\t{}\n", message);
     }
 
     uint32_t options_ = LogOpt::Most;  // Almost everything on by default
