@@ -8,7 +8,7 @@ The Z80 emulation and instruction disassembly are handled by Andre Weissflog's e
 
 - Instruction-by-instruction tracing with cycle counts
 - Memory access monitoring (reads, writes, and instruction fetches)
-- Memory protection (specify allowed read/write/execute permissions for memory ranges)
+- Memory protection (specify allowed read/write/execute permissions for memory ranges), allowing you to catch buffer overflows, stack overflows, and other memory corruption issues
 - Variable watching (monitor changes to bytes, words, or ranges of memory)
 - Symbol table support (automatically loads `.sym` files for `.bin` files)
 - Case-insensitive symbol lookup with offset support (e.g., `symbol+2`)
@@ -18,17 +18,22 @@ The Z80 emulation and instruction disassembly are handled by Andre Weissflog's e
 Here's an example showing various features in action:
 
 ```console
-./z80run --load program.bin@0xe000 --stack stack-2 \
+./z80run --load program.bin@0xe000 --stack STACK \
          --watch-word counter --watch-range buffer-buffer+16 \
-         --protect 0-stack:rwx --max-cycles 1000
+         --protect 0x0-stack-101 --protect stack-100-stack:rw \
+         --protect QuickSort-0xffff:x --max-cycles 1000
 ```
 
 This command:
+
 - Loads `program.bin` at address 0xE000
-- Sets the stack pointer to STACK-2
+- Sets the stack pointer to the value of the symbol `STACK`
 - Watches a word-sized variable named 'counter'
 - Watches 16 bytes starting at 'buffer'
-- Protects memory from 0 to STACK with read/write/execute permissions
+- Protects memory from 0 to STACK-101 from all access
+- Protects the stack region from STACK-100 to STACK, only allowing reads and writes (code execution is disallowed)
+    - Note: `stack-100-stack:rw` may seem like it's abiguous, but `100-stack` is not a valid end point for the region so the `100` must belong to the start point. But if it troubles you you can always use `stack-100-stack-0:rw` or `'stack-100 - stack:rw'` instead.
+- Protects the memory range from QuickSort to 0xFFFF from data access, only allowing code execution
 - Runs for at most 1000 cycles
 
 The output shows instruction execution, memory access, and detected changes:
@@ -54,7 +59,7 @@ Memory watching:
 - `--watch addr` - Watch byte at address
 - `--watch-word addr` - Watch 16-bit word
 - `--watch-long addr` - Watch 32-bit value
-- `--watch-range start-end` - Watch range of memory
+- `--watch-range start-end` - Watch range of memory.
 
 All addresses can be specified as hex values or symbols (with optional +/- offsets).
 
@@ -70,7 +75,7 @@ SYMBOL  EQU  1234H
 
 ### Get the Dependencies
 
-Run `./download-deps.sh` to download the required header files from Andre Weissflog's Chips library.  These are header-only libaries, so no special installation is required.
+Run `./download-deps.sh` to download the required header files from Andre Weissflog's Chips library.  These are header-only libraries, so no special installation is required.
 
 Or manually download:
 - `z80.h` from https://github.com/floooh/chips/blob/master/chips/z80.h
@@ -83,4 +88,3 @@ Requires a C++20 compiler:
 ```console
 g++ -Wall -std=c++20 -o z80run z80run.cpp
 ```
-
