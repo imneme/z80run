@@ -139,75 +139,98 @@ private:
     std::vector<Range> ranges_;
 };
 
+enum class LogOpt : uint32_t {
+    Instructions = 1 << 0,
+    MemoryReads  = 1 << 1,
+    MemoryWrites = 1 << 2,
+    Violations   = 1 << 3,
+    Cycles       = 1 << 4,
+    All = Instructions | MemoryReads | MemoryWrites | Violations | Cycles
+};
+
+inline LogOpt operator|(LogOpt a, LogOpt b) {
+    return static_cast<LogOpt>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
+
 class EventLogger {
 public:
-    enum class Verbosity : uint32_t {
-        Instructions = 1 << 0,
-        MemoryReads = 1 << 1,
-        MemoryWrites = 1 << 2,
-        Violations = 1 << 3,
-        ShowCycles = 1 << 4,
-    };
 
     EventLogger(const SymbolTable& symbols) : symbols_(symbols) {}
 
     void set_verbosity(uint32_t flags) {
-        verbosity_ = flags;
+        options_ = flags;
+    }
+
+    void cycle_count(uint32_t count) {
+        current_cycle_ = count;
     }
 
     void instruction_start(uint16_t pc, const class CPU& cpu);  // Defined after CPU
 
     void memory_read(uint16_t addr, uint8_t value, bool is_instruction) {
-        if (!is_instruction && !(verbosity_ & static_cast<uint32_t>(Verbosity::MemoryReads))) {
+        if (!is_instruction && !(options_ & static_cast<uint32_t>(LogOpt::MemoryReads))) {
             return;
         }
         
+        if (options_ & static_cast<uint32_t>(LogOpt::Cycles)) {
+            std::cout << std::format("{:7}:", current_cycle_);
+        }
+
         if (auto sym = symbols_.find_symbol(addr)) {
-            std::cout << std::format("\t\tR {:02x} @ {} ", value, *sym);
+            std::cout << std::format(" \t\tR {:02x} @ {} ", value, *sym);
         } else {
-            std::cout << std::format("\t\tR {:02x} @ {:04x}", value, addr);
+            std::cout << std::format(" \t\tR {:02x} @ {:04x}", value, addr);
         }
         std::cout << "\n";
     }
 
     void memory_write(uint16_t addr, uint8_t value) {
-        if (!(verbosity_ & static_cast<uint32_t>(Verbosity::MemoryWrites))) {
+        if (!(options_ & static_cast<uint32_t>(LogOpt::MemoryWrites))) {
             return;
         }
 
+        if (options_ & static_cast<uint32_t>(LogOpt::Cycles)) {
+            std::cout << std::format("{:7}:", current_cycle_);
+        }
+
         if (auto sym = symbols_.find_symbol(addr)) {
-            std::cout << std::format("\t\tW {:02x} @ {} ", value, *sym);
+            std::cout << std::format(" \t\tW {:02x} @ {} ", value, *sym);
         } else {
-            std::cout << std::format("\t\tW {:02x} @ {:04x}", value, addr);
+            std::cout << std::format(" \t\tW {:02x} @ {:04x}", value, addr);
         }
         std::cout << "\n";
     }
 
     void violation(std::string_view message, std::optional<uint16_t> addr = std::nullopt) {
-        if (!(verbosity_ & static_cast<uint32_t>(Verbosity::Violations))) {
+        if (!(options_ & static_cast<uint32_t>(LogOpt::Violations))) {
             return;
+        }
+
+        if (options_ & static_cast<uint32_t>(LogOpt::Cycles)) {
+            std::cout << std::format("{:7}:", current_cycle_);
         }
 
         if (addr) {
             if (auto sym = symbols_.find_symbol(*addr)) {
-                std::cout << std::format("Violation: {} at {}\n", message, *sym);
+                std::cout << std::format(" Violation: {} at {}\n", message, *sym);
             } else {
-                std::cout << std::format("Violation: {} at {:04x}\n", message, *addr);
+                std::cout << std::format(" Violation: {} at {:04x}\n", message, *addr);
             }
         } else {
-            std::cout << std::format("Violation: {}\n", message);
+            std::cout << std::format(" Violation: {}\n", message);
         }
     }
 
 private:
-    uint32_t verbosity_ = 0xFFFFFFFF;  // Everything on by default
+    uint32_t options_ = static_cast<uint32_t>(LogOpt::All);  // Everything on by default
+    uint32_t current_cycle_ = 0;
     const SymbolTable& symbols_;
 };
 
 class CPU : public z80_t {
 public:
     std::span<uint8_t> memory() const { return memory_; }
-public:
+
     CPU(EventLogger& logger, ConstraintChecker& checker) 
         : logger_(logger), checker_(checker) {
         pins_ = z80_init(this);
@@ -269,7 +292,7 @@ private:
 
 // Now we can define instruction_start since we have CPU
 void EventLogger::instruction_start(uint16_t pc, const CPU& cpu) {
-    if (!(verbosity_ & static_cast<uint32_t>(Verbosity::Instructions))) {
+    if (!(options_ & static_cast<uint32_t>(LogOpt::Instructions))) {
         return;
     }
 
@@ -336,6 +359,7 @@ struct Config {
     std::vector<std::tuple<uint16_t, uint16_t, uint8_t>> protections;
     std::optional<uint16_t> start_address;
     std::optional<uint16_t> stack_address;
+    std::optional<uint32_t> max_cycles;
 };
 
 void load_binary(const std::string& filename, std::span<uint8_t> memory, size_t offset) {
@@ -356,7 +380,7 @@ void load_binary(const std::string& filename, std::span<uint8_t> memory, size_t 
 
 Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
     Config cfg;
-    
+
     for (int i = 1; i < argc; i++) {
         std::string_view arg(argv[i]);
         
@@ -462,6 +486,17 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
             
             cfg.protections.emplace_back(start, end, permissions);
         }
+        else if (arg == "--max-cycles") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("--max-cycles requires an argument");
+            }
+            std::string cycles_str = argv[++i];
+            try {
+                cfg.max_cycles = std::stoul(cycles_str);
+            } catch (const std::exception&) {
+                throw std::runtime_error(std::format("Invalid number of cycles: {}", cycles_str));
+            }
+        }
     }
     
     return cfg;
@@ -538,11 +573,16 @@ int main(int argc, char* argv[]) try {
     cpu.set_pc(start_addr);
     
     // Run until we hit a violation or max cycles
-    constexpr int MAX_CYCLES = 100000;
-    for (int i = 0; i < MAX_CYCLES; i++) {
+    for (uint32_t cycles = 0; !cfg.max_cycles || cycles < *cfg.max_cycles; cycles++) {
+        logger.cycle_count(cycles);
         if (!cpu.step()) {
             return 1;
         }
+    }
+
+    if (cfg.max_cycles && cfg.verbosity & static_cast<uint32_t>(LogOpt::Cycles)) {
+        std::cout << std::format("{:7}: Reached maximum cycle count ({})\n", 
+            *cfg.max_cycles, *cfg.max_cycles);
     }
     
     return 0;
