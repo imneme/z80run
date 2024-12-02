@@ -282,10 +282,10 @@ private:
     bool check_permission(uint16_t addr, uint8_t flag) const {
         for (const auto& range : ranges_) {
             if (addr >= range.start && addr <= range.end) {
-                return (range.flags & flag) != 0;  // Permission granted if flag is set
+                return (range.flags & flag) == 0; // Flag clear means permission granted
             }
         }
-        return false;  // No range found = no permissions
+        return true;  // No range found, assme permission granted
     }
 
     std::vector<Range> ranges_;
@@ -685,12 +685,12 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
             uint16_t start = std::stoul(range.substr(0, dash_pos), nullptr, 0);
             uint16_t end = std::stoul(range.substr(dash_pos + 1), nullptr, 0);
             
-            uint8_t permissions = 0;
+            uint8_t permissions = ConstraintChecker::NO_READ | ConstraintChecker::NO_WRITE | ConstraintChecker::NO_EXEC;
             for (char c : flags) {
                 switch (c) {
-                    case 'r': permissions |= ConstraintChecker::NO_READ; break;
-                    case 'w': permissions |= ConstraintChecker::NO_WRITE; break;
-                    case 'x': permissions |= ConstraintChecker::NO_EXEC; break;
+                    case 'r': permissions &= ~ConstraintChecker::NO_READ; break;
+                    case 'w': permissions &= ~ConstraintChecker::NO_WRITE; break;
+                    case 'x': permissions &= ~ConstraintChecker::NO_EXEC; break;
                     default:
                         throw std::runtime_error(std::format("Invalid permission flag: {}", c));
                 }
