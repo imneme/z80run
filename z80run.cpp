@@ -108,21 +108,17 @@ public:
         
         // Look up base symbol (case insensitive)
         auto it = by_name_.find(symbol);
+        uint16_t addr;
         if (it == by_name_.end()) {
-            // Try case-insensitive search
-            for (const auto& [key, value] : by_name_) {
-                if (!CaseInsensitiveCompare()(key, symbol) && 
-                    !CaseInsensitiveCompare()(symbol, key)) {
-                    it = by_name_.find(key);
-                    break;
-                }
-            }
-            if (it == by_name_.end()) {
+            // Try using as a numeric address
+            try {
+                addr = std::stoul(symbol, nullptr, 0);
+            } catch (...) {
                 return std::nullopt;
             }
+        } else {
+            addr = it->second;
         }
-        
-        uint16_t addr = it->second;
         
         // Handle offset if present
         if (match[2].matched) {
@@ -602,26 +598,20 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
             }
             std::string spec = argv[++i];
             
-            // Parse file@addr or file:symbol
-            size_t sep_pos = spec.find_first_of("@:");
+            // Parse file@addr or file@symbol
+            size_t sep_pos = spec.find('@');
             if (sep_pos == std::string::npos) {
-                throw std::runtime_error("--load requires @addr or :symbol");
+                throw std::runtime_error("--load requires @addr or @symbol");
             }
             
             std::string filename = spec.substr(0, sep_pos);
             std::string addr_spec = spec.substr(sep_pos + 1);
             uint16_t addr;
             
-            if (spec[sep_pos] == '@') {
-                // Parse hex address
-                addr = std::stoul(addr_spec, nullptr, 0);
+            if (auto sym_addr = symbols.find_address(addr_spec)) {
+                addr = *sym_addr;
             } else {
-                // Look up symbol
-                if (auto sym_addr = symbols.find_address(addr_spec)) {
-                    addr = *sym_addr;
-                } else {
-                    throw std::runtime_error(std::format("Unknown symbol: {}", addr_spec));
-                }
+                throw std::runtime_error(std::format("Unknown symbol: {}", addr_spec));
             }
             
             cfg.files_to_load.push_back({filename, addr});
@@ -633,15 +623,10 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
             std::string addr_spec = argv[++i];
             
             // Could be a hex address or a symbol
-            try {
-                cfg.start_address = std::stoul(addr_spec, nullptr, 0);
-            } catch (const std::exception&) {
-                // Not a number, try as symbol
-                if (auto sym_addr = symbols.find_address(addr_spec)) {
-                    cfg.start_address = *sym_addr;
-                } else {
-                    throw std::runtime_error(std::format("Unknown symbol: {}", addr_spec));
-                }
+            if (auto sym_addr = symbols.find_address(addr_spec)) {
+                cfg.start_address = *sym_addr;
+            } else {
+                throw std::runtime_error(std::format("Unknown symbol: {}", addr_spec));
             }
         }
         else if (arg == "--stack") {
@@ -650,16 +635,10 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
             }
             std::string addr_spec = argv[++i];
             
-            // Could be a hex address or a symbol
-            try {
-                cfg.stack_address = std::stoul(addr_spec, nullptr, 0);
-            } catch (const std::exception&) {
-                // Not a number, try as symbol
-                if (auto sym_addr = symbols.find_address(addr_spec)) {
-                    cfg.stack_address = *sym_addr;
-                } else {
-                    throw std::runtime_error(std::format("Unknown symbol: {}", addr_spec));
-                }
+            if (auto sym_addr = symbols.find_address(addr_spec)) {
+                cfg.stack_address = *sym_addr;
+            } else {
+                throw std::runtime_error(std::format("Unknown symbol: {}", addr_spec));
             }
         }
         else if (arg == "--protect") {
@@ -670,20 +649,27 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
             
             // Parse addr-addr:flags format
             size_t sep_pos = spec.find(':');
+            std::string range;
+            std::string flags;
             if (sep_pos == std::string::npos) {
-                throw std::runtime_error("--protect requires :flags");
+                range = spec;
+            } else {            
+                range = spec.substr(0, sep_pos);
+                flags = spec.substr(sep_pos + 1);
             }
-            
-            std::string range = spec.substr(0, sep_pos);
-            std::string flags = spec.substr(sep_pos + 1);
             
             size_t dash_pos = range.find('-');
             if (dash_pos == std::string::npos) {
                 throw std::runtime_error("--protect requires addr-addr range");
             }
             
-            uint16_t start = std::stoul(range.substr(0, dash_pos), nullptr, 0);
-            uint16_t end = std::stoul(range.substr(dash_pos + 1), nullptr, 0);
+            auto startOpt = symbols.find_address(range.substr(0, dash_pos));
+            auto endOpt = symbols.find_address(range.substr(dash_pos + 1));
+            if (!startOpt || !endOpt) {
+                throw std::runtime_error("invalid address in --protect");
+            }
+            uint16_t start = *startOpt;
+            uint16_t end = *endOpt;
             
             uint8_t permissions = ConstraintChecker::NO_READ | ConstraintChecker::NO_WRITE | ConstraintChecker::NO_EXEC;
             for (char c : flags) {
@@ -717,15 +703,10 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
             uint16_t addr;
 
             // Could be a hex address or a symbol
-            try {
-                addr = std::stoul(addr_spec, nullptr, 0);
-            } catch (const std::exception&) {
-                // Not a number, try as symbol
-                if (auto sym_addr = symbols.find_address(addr_spec)) {
-                    addr = *sym_addr;
-                } else {
-                    throw std::runtime_error(std::format("Unknown symbol: {}", addr_spec));
-                }
+            if (auto sym_addr = symbols.find_address(addr_spec)) {
+                addr = *sym_addr;
+            } else {
+                throw std::runtime_error(std::format("Unknown symbol: {}", addr_spec));
             }
 
             Config::WatchSpec::Type type = Config::WatchSpec::Type::Byte;
@@ -754,25 +735,17 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
             uint16_t start_addr, end_addr;
             
             // Parse start address
-            try {
-                start_addr = std::stoul(start_spec, nullptr, 0);
-            } catch (const std::exception&) {
-                if (auto sym_addr = symbols.find_address(start_spec)) {
-                    start_addr = *sym_addr;
-                } else {
-                    throw std::runtime_error(std::format("Unknown symbol: {}", start_spec));
-                }
+            if (auto sym_addr = symbols.find_address(start_spec)) {
+                start_addr = *sym_addr;
+            } else {
+                throw std::runtime_error(std::format("Unknown symbol: {}", start_spec));
             }
             
             // Parse end address
-            try {
-                end_addr = std::stoul(end_spec, nullptr, 0);
-            } catch (const std::exception&) {
-                if (auto sym_addr = symbols.find_address(end_spec)) {
-                    end_addr = *sym_addr;
-                } else {
-                    throw std::runtime_error(std::format("Unknown symbol: {}", end_spec));
-                }
+            if (auto sym_addr = symbols.find_address(end_spec)) {
+                end_addr = *sym_addr;
+            } else {
+                throw std::runtime_error(std::format("Unknown symbol: {}", end_spec));
             }
             
             cfg.watches.push_back({Config::WatchSpec::Type::Range, start_addr, end_addr});
