@@ -621,6 +621,34 @@ void load_binary(const std::string& filename, std::span<uint8_t> memory, size_t 
     file.read(reinterpret_cast<char*>(memory.data() + offset), size);
 }
 
+std::pair<uint16_t,uint16_t> parse_range_or_value(std::string_view range, const SymbolTable& symbols) {
+    // Parse symbol[+-]offset format
+    static std::regex re(R"(\s*(0x[a-fA-F\d]+|\d+|[^\W\d]\w*(?:[-+]\d+)?)(?:\s*-\s*(0x[a-fA-F\d]+|\d+|[^\W\d]\w*(?:[-+]\d+)?))?\s*)");
+    std::match_results<std::string_view::const_iterator> match;
+    if (!std::regex_match(range.begin(), range.end(), match, re)) {
+        throw std::runtime_error("Invalid range or value");
+    }
+    auto startStr = std::string(match[1]);
+    auto start = symbols.find_address(startStr);
+    if (!start) {
+        throw std::runtime_error("Couldn't parse or resolve start address: " + startStr);
+    }
+    uint16_t startAddr = *start;
+    uint16_t endAddr = startAddr;
+    if (match[2].matched) {
+        auto endStr = std::string(match[2]);
+        auto end = symbols.find_address(endStr);
+        if (!end) {
+            throw std::runtime_error("Couldn't parse or resolve end address: " + endStr);
+        }
+        endAddr = *end;
+    }
+    if (endAddr < startAddr) {
+        throw std::runtime_error("End address is before start address");
+    }
+    return {startAddr, endAddr};
+}
+
 Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
     Config cfg;
 
@@ -683,7 +711,7 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
             std::string spec = argv[++i];
             
             // Parse addr-addr:flags format
-            size_t sep_pos = spec.find(':');
+            size_t sep_pos = spec.rfind(':');
             std::string range;
             std::string flags;
             if (sep_pos == std::string::npos) {
@@ -692,26 +720,19 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
                 range = spec.substr(0, sep_pos);
                 flags = spec.substr(sep_pos + 1);
             }
-            
-            size_t dash_pos = range.find('-');
-            if (dash_pos == std::string::npos) {
-                throw std::runtime_error("--protect requires addr-addr range");
-            }
-            
-            auto startOpt = symbols.find_address(range.substr(0, dash_pos));
-            auto endOpt = symbols.find_address(range.substr(dash_pos + 1));
-            if (!startOpt || !endOpt) {
-                throw std::runtime_error("invalid address in --protect");
-            }
-            uint16_t start = *startOpt;
-            uint16_t end = *endOpt;
-            
+
+            // Test out new range parsing function
+            auto [start, end] = parse_range_or_value(range, symbols);
+                        
             uint8_t permissions = ConstraintChecker::NO_READ | ConstraintChecker::NO_WRITE | ConstraintChecker::NO_EXEC;
             for (char c : flags) {
                 switch (c) {
                     case 'r': permissions &= ~ConstraintChecker::NO_READ; break;
                     case 'w': permissions &= ~ConstraintChecker::NO_WRITE; break;
                     case 'x': permissions &= ~ConstraintChecker::NO_EXEC; break;
+                    case ' ':
+                    case '\t':
+                    case '\n': break; // Ignore whitespace
                     default:
                         throw std::runtime_error(std::format("Invalid permission flag: {}", c));
                 }
