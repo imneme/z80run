@@ -318,6 +318,8 @@ public:
 
     void instruction_start(uint16_t pc, const class CPU& cpu);  // Defined after CPU
 
+    void instruction_finish(uint16_t pc, const class CPU& cpu); // Defined after CPU
+
     void memory_read(uint16_t addr, uint8_t value, bool is_instruction) {
         // Always check detectors, regardless of logging options
         for (auto& detector : detectors_) {
@@ -417,6 +419,9 @@ public:
 
     bool step() {
         if (z80_opdone(this)) {
+            if (last_instr_pc_) {
+                logger_.instruction_finish(*last_instr_pc_, *this);
+            }
             logger_.instruction_start(pc - 1, *this);
         }
         pins_ = z80_tick(this, pins_);
@@ -428,6 +433,9 @@ public:
     }
 
     void set_pc(uint16_t addr) {
+        if (last_instr_pc_) {
+            logger_.instruction_finish(*last_instr_pc_, *this);
+        }
         pins_ = z80_prefetch(this, addr);
     }
 
@@ -470,6 +478,7 @@ private:
     EventLogger& logger_;
     ConstraintChecker& checker_;
     std::span<uint8_t> memory_;
+    std::optional<uint16_t> last_instr_pc_;
 };
 
 // Now we can define instruction_start since we have CPU
@@ -537,6 +546,12 @@ std::string SymbolTable::disassemble_address(uint32_t address, std::span<uint8_t
     result.append(input.begin() + last_pos, input.end());
 
     return result;
+}
+
+// And instruction_finish, does nothing right now
+void EventLogger::instruction_finish(uint16_t pc, const CPU& cpu) {
+    (void)pc;
+    (void)cpu;
 }
 
 struct Config {
