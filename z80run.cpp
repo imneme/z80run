@@ -440,7 +440,10 @@ private:
                 logger_.violation("Memory read not allowed", addr);
                 return false;
             }
-            bool is_instruction = (pins_ & Z80_M1) != 0;
+            // You might think that Z80_M1 is the thing to check here, but
+            // actually that only fires on the first cycle of an instruction
+            // if it's a multibyte instruction, you'll be out of luck.
+            bool is_instruction = addr == this->pc - 1;
             if (is_instruction && !checker_.check_execute(addr)) {
                 logger_.violation("Instruction fetch not allowed", addr);
                 return false;
