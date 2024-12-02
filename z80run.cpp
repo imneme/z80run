@@ -418,6 +418,7 @@ public:
             if (last_instr_pc_) {
                 logger_.instruction_finish(*last_instr_pc_, *this);
             }
+            last_instr_pc_ = pc - 1;
             logger_.instruction_start(pc - 1, *this);
         }
         pins_ = z80_tick(this, pins_);
