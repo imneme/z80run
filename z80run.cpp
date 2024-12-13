@@ -99,6 +99,8 @@ public:
                 return std::nullopt;
             } else if (offset < 0) {
                 return std::format("{}{}", it->second, offset);
+            } else if (offset > 1024) {
+                return std::nullopt;
             }
             return std::format("{}+{}", it->second, offset);
         }
