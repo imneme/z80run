@@ -666,7 +666,29 @@ Config parse_args(int argc, char* argv[], const SymbolTable& symbols) {
     for (int i = 1; i < argc; i++) {
         std::string_view arg(argv[i]);
         
-        if (arg == "--load") {
+        if (arg == "-h" || arg == "--help") {
+            std::cout << "Usage: z80run [options]\n"
+                "Options:\n"
+                "  --load file@addr  Load binary file at address\n"
+                "  --start addr      Start execution at address\n"
+                "  --stack addr      Set stack pointer to address\n"
+                "  --protect range:flags  Protect memory range with flags\n"
+                "  --watch addr      Watch byte at address\n"
+                "  --watch-word addr Watch word at address\n"
+                "  --watch-long addr Watch long at address\n"
+                "  --watch range     Watch memory range\n"
+                "  --max-cycles n    Stop after n cycles\n"
+                "  --logopts flags   Set logging options\n"
+                "                c - cycles\n"
+                "                i - instructions\n"
+                "                r - memory reads\n"
+                "                w - memory writes\n"
+                "                f - instruction fetches\n"
+                "                v - violations\n"
+                "                a - all\n"
+                "                m - most (default)\n";
+            std::exit(0);
+        } else if (arg == "--load") {
             if (i + 1 >= argc) {
                 throw std::runtime_error("--load requires an argument");
             }
