@@ -64,13 +64,22 @@ public:
             throw std::runtime_error(std::format("Cannot open symbol file: {}", filename));
         }
 
-        std::regex re(R"((\w+)\s+EQU\s+([0-9A-F]+)H)");
+        std::regex re(R"((\w+)\s+EQU\s+(\$?[0-9A-F]+H?))", std::regex::icase);
         std::string line;
         while (std::getline(file, line)) {
             std::smatch match;
             if (std::regex_search(line, match, re)) {
                 const std::string& symbol = match[1];
-                auto address = std::stoul(match[2], nullptr, 16);
+                int address;
+                // auto address = std::stoul(match[2], nullptr, 16);
+                std::string address_str = match[2];
+                if (address_str.front() == '$') {
+                    address = std::stoul(address_str.substr(1), nullptr, 16);
+                } else if (address_str.back() == 'H') {
+                    address = std::stoul(address_str.substr(0, address_str.size() - 1), nullptr, 16);
+                } else {
+                    address = std::stoul(address_str, nullptr, 0);
+                }
                 by_address_[address] = symbol;
                 by_name_[symbol] = address;
             }
